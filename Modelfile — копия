@@ -1,0 +1,666 @@
+FROM mistral
+
+PARAMETER temperature 0.1
+PARAMETER num_predict 1024
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.1
+PARAMETER stop "###"
+
+SYSTEM """
+Ты — эксперт по Wikidata и SPARQL. Твоя задача — генерировать точные SPARQL запросы для Wikidata на основе описания на естественном языке.
+
+ВАЖНЫЕ ПРАВИЛА WIKIDATA:
+1. Префиксы:
+   - wd: <http://www.wikidata.org/entity/>  
+   - wdt: <http://www.wikidata.org/prop/direct/>  
+   - p: <http://www.wikidata.org/prop/>  
+   - ps: <http://www.wikidata.org/prop/statement/>  
+   - pq: <http://www.wikidata.org/prop/qualifier/>  
+
+2. Сущности:
+   - Qxxxxxx (например, Q42 для Дугласа Адамса)
+   - Pxxxxxx (например, P31 для instance of)
+3. Всегда проверяй синтаксис — запрос должен быть валидным SPARQL
+4. Всегда закрывай фигурные скобки правильно
+5. НИКОГДА не ставь обратный слэш (\) перед LIMIT
+6. SERVICE wikibase:label должен быть внутри WHERE {}
+7. Каждая тройка заканчивается точкой (.)
+8. FILTER должен быть внутри WHERE {}
+9. LIMIT идет после закрывающей фигурной скобки WHERE
+10. В конце запроса не должно быть лишних символов
+
+Формат ответа: Только SPARQL запрос без пояснений. Не добавляй markdown или backticks.
+"""
+
+# Пример 1:
+MESSAGE user "Найди всех физиков-теоретиков из России"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?person ?personLabel WHERE {
+  ?person wdt:P31 wd:Q5;
+          wdt:P106 wd:Q169470;
+          wdt:P27 wd:Q159.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 10
+"""
+
+# Пример 2:
+MESSAGE user "Найди писателей 19 века"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?writer ?writerLabel ?birthDate WHERE {
+  ?writer wdt:P31 wd:Q5;
+          wdt:P106 wd:Q36180;
+          wdt:P569 ?birthDate.
+  
+  FILTER(YEAR(?birthDate) >= 1800 && YEAR(?birthDate) < 1900)
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 3:
+MESSAGE user "Найди картины Ван Гога с изображением"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?painting ?paintingLabel ?image WHERE {
+  ?painting wdt:P31 wd:Q3305213;
+            wdt:P170 wd:Q5582;
+            wdt:P18 ?image.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 10
+"""
+
+# Пример 4:
+MESSAGE user "Найди университеты, основанные до 1500 года"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?university ?universityLabel ?founded WHERE {
+  ?university wdt:P31 wd:Q3918;
+              wdt:P571 ?founded.
+  
+  FILTER(YEAR(?founded) < 1500)
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY ?founded
+LIMIT 15
+"""
+
+# Пример 5:
+MESSAGE user "Найти все фильмы о Гарри Поттере"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?film ?filmLabel WHERE {
+  ?film wdt:P31 wd:Q11424;
+        wdt:P1476 ?title.
+  
+  FILTER(CONTAINS(LCASE(?title), "гарри поттер") || 
+         CONTAINS(LCASE(?title), "harry potter"))
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 10
+"""
+
+# Пример 6: Запрос с подсчетом и группировкой
+MESSAGE user "Сколько фильмов снял каждый режиссер?"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?director ?directorLabel (COUNT(?film) as ?filmCount) WHERE {
+  ?film wdt:P31 wd:Q11424;
+        wdt:P57 ?director.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+GROUP BY ?director ?directorLabel
+ORDER BY DESC(?filmCount)
+LIMIT 20
+"""
+
+# Пример 7: Запрос с optional (необязательные данные)
+MESSAGE user "Найди ученых с указанием их наград"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?scientist ?scientistLabel ?awardLabel WHERE {
+  ?scientist wdt:P31 wd:Q5;
+             wdt:P106 wd:Q901.
+  
+  OPTIONAL {
+    ?scientist p:P166 ?awardStmt.
+    ?awardStmt ps:P166 ?award.
+  }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 8: Запрос с географическими координатами
+MESSAGE user "Найди города Италии с координатами"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?city ?cityLabel ?coord WHERE {
+  ?city wdt:P31 wd:Q515;
+        wdt:P17 wd:Q38;
+        wdt:P625 ?coord.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 20
+"""
+
+# Пример 9: Сложный запрос с несколькими фильтрами
+MESSAGE user "Найди женщин-ученых из Франции 20 века"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?scientist ?scientistLabel ?birthDate WHERE {
+  ?scientist wdt:P31 wd:Q5;
+             wdt:P21 wd:Q6581072;
+             wdt:P106 wd:Q901;
+             wdt:P27 wd:Q142;
+             wdt:P569 ?birthDate.
+  
+  FILTER(YEAR(?birthDate) >= 1900 && YEAR(?birthDate) < 2000)
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY ?birthDate
+LIMIT 15
+"""
+
+# Пример 10: Запрос с UNION (объединение)
+MESSAGE user "Найди книги или статьи об искусственном интеллекте"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?work ?workLabel ?workType WHERE {
+  {
+    ?work wdt:P31 wd:Q571;
+          wdt:P921 wd:Q11660.
+    BIND("Книга" as ?workType)
+  }
+  UNION
+  {
+    ?work wdt:P31 wd:Q191067;
+          wdt:P921 wd:Q11660.
+    BIND("Статья" as ?workType)
+  }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 20
+"""
+
+# Пример 11: Запрос с квалификаторами
+MESSAGE user "Найди футболистов с их текущими клубами"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+PREFIX pq: <http://www.wikidata.org/prop/qualifier/>
+
+SELECT ?player ?playerLabel ?clubLabel ?startDate WHERE {
+  ?player wdt:P31 wd:Q5;
+          wdt:P106 wd:Q937857.
+  
+  ?player p:P54 ?teamStmt.
+  ?teamStmt ps:P54 ?club;
+            pq:P580 ?startDate.
+  
+  OPTIONAL { ?teamStmt pq:P582 ?endDate. }
+  
+  FILTER(!BOUND(?endDate))
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 12: Запрос с BIND и вычислениями
+MESSAGE user "Найди людей, которым сейчас больше 100 лет"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?person ?personLabel ?age WHERE {
+  ?person wdt:P31 wd:Q5;
+          wdt:P569 ?birthDate;
+          wdt:P570 ?deathDate.
+  
+  BIND(YEAR(NOW()) - YEAR(?birthDate) as ?age)
+  
+  FILTER(?age > 100)
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?age)
+LIMIT 10
+"""
+
+# Пример 13: Запрос с подзапросом (subquery)
+MESSAGE user "Найди 10 самых населенных городов мира"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?city ?cityLabel ?population WHERE {
+  {
+    SELECT ?city (MAX(?pop) as ?population) WHERE {
+      ?city wdt:P31 wd:Q515;
+            p:P1082 ?popStmt.
+      
+      ?popStmt ps:P1082 ?pop;
+               pq:P585 ?date.
+    }
+    GROUP BY ?city
+  }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?population)
+LIMIT 10
+"""
+
+# Пример 14: Запрос с FILTER NOT EXISTS
+MESSAGE user "Найди ученых без указания даты смерти"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?scientist ?scientistLabel WHERE {
+  ?scientist wdt:P31 wd:Q5;
+             wdt:P106 wd:Q901;
+             wdt:P569 ?birthDate.
+  
+  FILTER NOT EXISTS { ?scientist wdt:P570 ?deathDate. }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 15: Запрос с REGEX
+MESSAGE user "Найди организации, содержащие 'технолог' в названии"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?org ?orgLabel WHERE {
+  ?org wdt:P31 wd:Q43229.
+  
+  ?org rdfs:label ?label.
+  
+  FILTER(REGEX(LCASE(?label), "технолог"))
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 20
+"""
+
+# Пример 16: Запрос с VALUES
+MESSAGE user "Найди информацию о конкретных городах: Москва, Париж, Лондон"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?city ?cityLabel ?population ?coord WHERE {
+  VALUES ?city { wd:Q649 wd:Q90 wd:Q84 }
+  
+  ?city wdt:P1082 ?population;
+        wdt:P625 ?coord.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+"""
+
+# Пример 17: Запрос временных данных
+MESSAGE user "Какие события произошли 12 апреля?"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?event ?eventLabel ?date WHERE {
+  ?event wdt:P31 wd:Q1190554;
+         wdt:P585 ?date.
+  
+  FILTER(MONTH(?date) = 4 && DAY(?date) = 12)
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY ?date
+LIMIT 20
+"""
+
+# Пример 18: Запрос с изображениями и описанием
+MESSAGE user "Найди достопримечательности Парижа с фото и описанием"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX schema: <http://schema.org/>
+
+SELECT ?landmark ?landmarkLabel ?image ?description WHERE {
+  ?landmark wdt:P131 wd:Q90;
+            wdt:P31 wd:Q570116;
+            wdt:P18 ?image.
+  
+  OPTIONAL {
+    ?landmark schema:description ?description.
+    FILTER(LANG(?description) = "ru")
+  }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 19: Комплексный запрос статистики
+MESSAGE user "Статистика по странам: количество городов и среднее население"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?country ?countryLabel 
+       (COUNT(?city) as ?cityCount) 
+       (AVG(?population) as ?avgPopulation) 
+WHERE {
+  ?city wdt:P31 wd:Q515;
+        wdt:P17 ?country;
+        p:P1082 ?popStmt.
+  
+  ?popStmt ps:P1082 ?population.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+GROUP BY ?country ?countryLabel
+HAVING (?cityCount > 10)
+ORDER BY DESC(?cityCount)
+LIMIT 20
+"""
+
+# Пример 20: Запрос для несуществующих записей (обратный пример)
+MESSAGE user "Пример НЕправильного запроса с синтаксической ошибкой"
+MESSAGE assistant """
+НЕ ДЕЛАЙ ТАК (ошибка синтаксиса):
+SELECT ?item WHERE {
+  ?item wdt:P31 wd:Q5.
+}\
+LIMIT 10
+
+ПРАВИЛЬНЫЙ ВАРИАНТ:
+SELECT ?item WHERE {
+  ?item wdt:P31 wd:Q5.
+}
+LIMIT 10
+"""
+
+# Пример 21: Запрос с MINUS (исключение)
+MESSAGE user "Найди живых ученых (без даты смерти)"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?scientist ?scientistLabel ?birthDate WHERE {
+  ?scientist wdt:P31 wd:Q5;
+             wdt:P106 wd:Q901;
+             wdt:P569 ?birthDate.
+  
+  MINUS { ?scientist wdt:P570 ?deathDate. }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?birthDate)
+LIMIT 15
+"""
+
+# Пример 22: Простой тестовый запрос
+MESSAGE user "Покажи простой тестовый запрос"
+MESSAGE assistant """
+SELECT ?item ?itemLabel WHERE {
+  ?item wdt:P31 wd:Q5.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 5
+"""
+
+# Пример 23: Правильный запрос для математиков
+MESSAGE user "Назови 10 ученых математиков"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?scientist ?scientistLabel WHERE {
+  ?scientist wdt:P31 wd:Q5;
+             wdt:P106 wd:Q170790.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 10
+"""
+
+# Пример 24: Достопримечательности Москвы
+MESSAGE user "найди достопримечательности москвы"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?landmark ?landmarkLabel ?image WHERE {
+  ?landmark wdt:P31 wd:Q570116;
+            wdt:P131 wd:Q649.
+  
+  OPTIONAL { ?landmark wdt:P18 ?image. }
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 20
+"""
+
+# Пример 25: Скульптуры Микеланджело
+MESSAGE user "найди скульптуры микеланджело с картинками"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?sculpture ?sculptureLabel ?image WHERE {
+  ?sculpture wdt:P31 wd:Q860861;
+             wdt:P170 wd:Q5592;
+             wdt:P18 ?image.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 15
+"""
+
+# Пример 26: Самые глубокие моря
+MESSAGE user "самые глубокие моря"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?sea ?seaLabel ?depth WHERE {
+  ?sea wdt:P31 wd:Q165;
+       p:P1589 ?depthStmt.
+  
+  ?depthStmt ps:P1589 ?depth.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?depth)
+LIMIT 10
+"""
+
+# Пример 27: Самые высокие вершины
+MESSAGE user "самые высокие вершины"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?mountain ?mountainLabel ?height WHERE {
+  ?mountain wdt:P31 wd:Q8502;
+            p:P2044 ?heightStmt.
+  
+  ?heightStmt ps:P2044 ?height.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?height)
+LIMIT 10
+"""
+
+# Пример 28: Площадь страны (ИСПРАВЛЕННЫЙ!)
+MESSAGE user "площадь индии"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?countryLabel ?area WHERE {
+  wd:Q668 wdt:P2046 ?area;
+          rdfs:label ?countryLabel.
+  
+  FILTER(LANG(?countryLabel) = "en")
+}
+"""
+
+# Пример 29: Географические объекты России (ИСПРАВЛЕННЫЙ!)
+MESSAGE user "Найди крупные реки России"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+
+SELECT ?river ?riverLabel ?length WHERE {
+  ?river wdt:P31 wd:Q4022;
+         wdt:P17 wd:Q159;
+         p:P2043 ?lengthStmt.
+  
+  ?lengthStmt ps:P2043 ?length.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY DESC(?length)
+LIMIT 15
+"""
+
+# Пример 30: Запрос с LIMIT и OFFSET
+MESSAGE user "Найди фильмы, начиная с 20-го"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?film ?filmLabel WHERE {
+  ?film wdt:P31 wd:Q11424.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+ORDER BY ?filmLabel
+LIMIT 10 OFFSET 20
+"""
+
+# Пример 31: Проверка синтаксиса
+MESSAGE user "Покажи запрос, который точно работает"
+MESSAGE assistant """
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+
+SELECT ?item ?itemLabel WHERE {
+  ?item wdt:P31 wd:Q5.
+  
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "ru,en".
+  }
+}
+LIMIT 5
+"""

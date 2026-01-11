@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-sparql
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    command: serve
+
+  sparql-generator:
+    build: .
+    container_name: sparql-generator
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ./results:/app/results
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    command: python3 sparql_generator.py
+
+volumes:
+  ollama_data:
